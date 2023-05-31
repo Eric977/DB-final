@@ -36,3 +36,12 @@ find_library(LZ4_LIBRARY NAMES lz4)
 include_directories(${LZ4_INCLUDE_DIR})
 target_link_libraries(${PROJECT_NAME} ${LZ4_LIBRARY})
 
+find_path(FASTPFOR_INCLUDE_DIR NAMES fastpfor.h)
+find_path(FASTPFOR_INCLUDE_CODECFACTORY NAMES codecfactory.h)
+find_path(FASTPFOR_INCLUDE_DELTAUTIL NAMES deltautil.h)
+find_library(FASTPFOR_LIBRARY NAMES FastPFOR)
+
+include_directories(${FASTPFOR_INCLUDE_DIR})
+include_directories(${FASTPFOR_INCLUDE_CODECFACTORY})
+include_directories(${FASTPFOR_INCLUDE_DELTAUTIL})
+target_link_libraries(${PROJECT_NAME} ${FASTPFOR_LIBRARY})
