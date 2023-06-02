@@ -7,25 +7,39 @@ using namespace std;
 
 
 int main() {
-    // compress for integer
-    // std::vector<int> original = {111, 111, 111, 111, 5, 50, 500, 8, 9, 10};
-    // std::vector<char> compressed = compress<int>(LZ4, original);
-    // std::vector<int> decompressed = decompress<int>(LZ4, compressed, original.size());
-    // for (const auto& val : decompressed) {
-    //     std::cout << val << " ";
-    // }
-
-    // compress for string (char array)
-    vector<array<char, 20>> original = {
-        array<char, 20> {"helloaaaa"},
-        array<char, 20> {"worldbb"},
-        array<char, 20> {"hellocc"},
-        array<char, 20> {"worlddd"}
+    // compress for pair<string, string> array
+    pair<string, string> data[20] = {
+        {"identifier1", "alpha@gamil.com"},
+        {"identifier2", "bravo@gamil.com"},
+        {"identifier3", "charlie@gmail.com"},
+        {"identifier4", "delta@gmail.com"},
+        {"identifier5", "echo@gmail.com"},
+        {"identifier6", "foxtrot@gmail.com"},
+        {"identifier7", "golf@ntu.edu.tw"},
+        {"identifier8", "hotel@ntu.edu.tw"},
+        {"identifier9", "india@ntu.edu.tw"},
+        {"identifier10", "juliett@microsoft.com"},
+        {"identifier11", "kilo@microsoft.com"},
+        {"identifier12", "lima@microsoft.com"},
+        {"identifier13", "mike@microsoft.com"},
+        {"identifier14", "november@gmail.com"},
+        {"identifier15", "oscar@gmail.com"},
+        {"identifier16", "papa@fatcat.com"},
+        {"identifier17", "quebec@fatcat.com"},
+        {"identifier18", "romeo@fatcat.com"},
+        {"identifier19", "sierra@fatcat.com"},
+        {"identifier20", "tango@fatcat.com"}
     };
-    vector<char> compressed = compress<array<char, 20>>(LZ4, original);
-    vector<array<char, 20>> decompressed = decompress<array<char, 20>>(LZ4, compressed, original.size());
+    vector<pair<string, string>> original;
+    for (int i = 0; i < 20; i ++) {
+        original.push_back(data[i]);
+    }
+
+    int srcSize = 0;
+    vector<char> compressed = compress<pair<string, string>>(LZ4, original, srcSize);
+    vector<pair<string, string>> decompressed = decompress<pair<string, string>>(LZ4, compressed, srcSize, original.size());
     for (const auto& val : decompressed) {
-        std::cout << val.data() << " ";
+        std::cout << val.first << " " << val.second << " " << std::endl;
     }
 
     /*
