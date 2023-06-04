@@ -24,6 +24,7 @@
 #include <memory>
 #include <ostream>
 #include <utility>
+#define NODESIZE 256
 
 namespace tlx {
 
@@ -87,12 +88,11 @@ struct btree_default_traits {
     //! Number of slots in each leaf of the tree. Estimated so that each node
     //! has a size of about 256 bytes.
     static const int leaf_slots =
-        TLX_BTREE_MAX(8, 256 / (sizeof(Value)));
-
+        TLX_BTREE_MAX(8, NODESIZE / (sizeof(Value)));
     //! Number of slots in each inner node of the tree. Estimated so that each
     //! node has a size of about 256 bytes.
     static const int inner_slots =
-        TLX_BTREE_MAX(8, 256 / (sizeof(Key) + sizeof(void*)));
+        TLX_BTREE_MAX(8, NODESIZE / (sizeof(Key) + sizeof(void*)));
 
     //! As of stx-btree-0.9, the code does linear search in find_lower() and
     //! find_upper() instead of binary_search, unless the node size is larger
@@ -1046,6 +1046,8 @@ public:
         //! Number of inner nodes in the B+ tree
         size_type inner_nodes;
 
+        // size_type max_capacity;
+
         //! Base B+ tree parameter: The number of key/data slots in each leaf
         static const unsigned short leaf_slots = Self::leaf_slotmax;
 
@@ -1510,6 +1512,8 @@ public:
 
     //! Return a const reference to the current statistics.
     const struct tree_stats& get_stats() const {
+        std::cout << "Leaf = " << leaf_slotmax << "\n";
+        std::cout << "Size fo Value = " << sizeof(Value) << "\n";
         return stats_;
     }
 
@@ -2032,6 +2036,7 @@ private:
             LeafNode* leaf = static_cast<LeafNode*>(n);
 
             // unsigned short slot = find_lower(leaf, key);
+            // compared based on type
             // auto slot = std::lower_bound(leaf->slotdata.begin(), leaf->slotdata.end(), make_pair(key, (unsigned long long)0)) - leaf->slotdata.begin();
             auto slot = std::lower_bound(
                 leaf->slotdata.begin(), leaf->slotdata.end(),
@@ -2057,9 +2062,10 @@ private:
                     leaf = static_cast<LeafNode*>(*splitnode);
                 }
             }
-
+            leaf->slotdata.reserve(leaf->slotdata.size() + 1);
             leaf->slotdata.insert(leaf->slotdata.begin() + slot, value);
             leaf->slotuse++;
+            // stats_.max_capacity = TLX_BTREE_MAX(stats_.max_capacity, leaf->slotdata.capacity());
 
             // move items and put data item into correct data slot
             TLX_BTREE_ASSERT(slot >= 0 && slot <= leaf->slotuse);

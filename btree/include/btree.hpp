@@ -24,7 +24,9 @@
 #include <ostream>
 #include <utility>
 
+#define NODESIZE 1024
 namespace tlx {
+
 
 //! \addtogroup tlx_container
 //! \{
@@ -86,12 +88,12 @@ struct btree_default_traits {
     //! Number of slots in each leaf of the tree. Estimated so that each node
     //! has a size of about 256 bytes.
     static const int leaf_slots =
-        TLX_BTREE_MAX(8, 256 / (sizeof(Value)));
+        TLX_BTREE_MAX(8, NODESIZE / (sizeof(Value)));
 
     //! Number of slots in each inner node of the tree. Estimated so that each
     //! node has a size of about 256 bytes.
     static const int inner_slots =
-        TLX_BTREE_MAX(8, 256 / (sizeof(Key) + sizeof(void*)));
+        TLX_BTREE_MAX(8, NODESIZE / (sizeof(Key) + sizeof(void*)));
 
     //! As of stx-btree-0.9, the code does linear search in find_lower() and
     //! find_upper() instead of binary_search, unless the node size is larger
