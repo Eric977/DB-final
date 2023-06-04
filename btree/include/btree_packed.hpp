@@ -16,7 +16,6 @@
 // *** Required Headers from the STL
 
 #include <algorithm>
-#include <vector>
 #include <cassert>
 #include <cstddef>
 #include <functional>
@@ -24,9 +23,10 @@
 #include <memory>
 #include <ostream>
 #include <utility>
-#define NODESIZE 256
 
+#define NODESIZE 1024
 namespace tlx {
+
 
 //! \addtogroup tlx_container
 //! \{
@@ -35,7 +35,7 @@ namespace tlx {
 //! \{
 
 // *** Debugging Macros
-
+#define TLX_BTREE_DEBUG
 #ifdef TLX_BTREE_DEBUG
 
 #include <iostream>
@@ -89,6 +89,7 @@ struct btree_default_traits {
     //! has a size of about 256 bytes.
     static const int leaf_slots =
         TLX_BTREE_MAX(8, NODESIZE / (sizeof(Value)));
+
     //! Number of slots in each inner node of the tree. Estimated so that each
     //! node has a size of about 256 bytes.
     static const int inner_slots =
@@ -282,13 +283,13 @@ private:
         LeafNode* next_leaf;
 
         //! Array of (key, data) pairs
-        // value_type slotdata[leaf_slotmax]; // NOLINT
-        // value_type *slotdata;
-        std::vector<value_type> slotdata;
+        value_type *slotdata; // NOLINT
+
         //! Set variables to initial values
         void initialize() {
             node::initialize(0);
             prev_leaf = next_leaf = nullptr;
+            slotdata = new value_type[leaf_slotmax / 2 + 1];
         }
 
         //! Return key in slot s.
@@ -317,10 +318,28 @@ private:
             TLX_BTREE_ASSERT(slot < node::slotuse);
             slotdata[slot] = value;
         }
+        void resize(unsigned int k){
+            if (node::slotuse + k > leaf_slotmax)
+                return;
+            value_type* new_slotdata = new value_type[node::slotuse+k];
+            std::copy(slotdata, slotdata + node::slotuse, new_slotdata);
+            delete []slotdata;
+            slotdata = new_slotdata;
+        }
+
+        void shrink(unsigned int k){
+            if (node::slotuse < k)
+                return;
+            value_type* new_slotdata = new value_type[node::slotuse - k];
+            std::copy(slotdata, slotdata + node::slotuse - k, new_slotdata);
+            delete []slotdata;
+            slotdata = new_slotdata;
+        }
+
     };
 
     //! \}
- 
+
 public:
     //! \name Iterators and Reverse Iterators
     //! \{
@@ -1046,8 +1065,6 @@ public:
         //! Number of inner nodes in the B+ tree
         size_type inner_nodes;
 
-        // size_type max_capacity;
-
         //! Base B+ tree parameter: The number of key/data slots in each leaf
         static const unsigned short leaf_slots = Self::leaf_slotmax;
 
@@ -1274,6 +1291,7 @@ private:
     void free_node(node* n) {
         if (n->is_leafnode()) {
             LeafNode* ln = static_cast<LeafNode*>(n);
+            // delete []ln->slotdata;
             typename LeafNode::alloc_type a(leaf_node_allocator());
             std::allocator_traits<typename LeafNode::alloc_type>::destroy(a, ln);
             std::allocator_traits<typename LeafNode::alloc_type>::deallocate(a, ln, 1);
@@ -1512,8 +1530,6 @@ public:
 
     //! Return a const reference to the current statistics.
     const struct tree_stats& get_stats() const {
-        std::cout << "Leaf = " << leaf_slotmax << "\n";
-        std::cout << "Size fo Value = " << sizeof(Value) << "\n";
         return stats_;
     }
 
@@ -1924,6 +1940,29 @@ private:
         return r;
     }
 
+    // Resize
+    // void resize(LeafNode* n, unsigned int k){
+    //     if (n->slotuse + k > leaf_slotmax)
+    //         return;
+    //     value_type* new_slotdata = new value_type[n->slotuse+k];
+    //     std::copy(n->slotdata, n->slotdata + n->slotuse, new_slotdata);
+    //     delete []n->slotdata;
+    //     n->slotdata = new_slotdata;
+    // }
+
+    // void shrink(LeafNode* n){
+    //     if (n->slotuse < 1)
+    //         return;
+    //     value_type* new_slotdata = new value_type[n->slotuse + 1];
+    //     std::copy(n->slotdata, n->slotdata + n->slotuse - 1, new_slotdata);
+    //     for (int i = 0; i < n->slotuse; i ++){
+    //         std::cout << n->slotdata[i].first << "\n";
+    //     }
+    //     delete []n->slotdata;
+    //     std::cout << "delete done\n";
+    //     n->slotdata = new_slotdata;
+    // }
+
     /*!
      * Insert an item into the B+ tree.
      *
@@ -2034,17 +2073,7 @@ private:
         else // n->is_leafnode() == true
         {
             LeafNode* leaf = static_cast<LeafNode*>(n);
-
-            // unsigned short slot = find_lower(leaf, key);
-            // compared based on type
-            // auto slot = std::lower_bound(leaf->slotdata.begin(), leaf->slotdata.end(), make_pair(key, (unsigned long long)0)) - leaf->slotdata.begin();
-            auto slot = std::lower_bound(
-                leaf->slotdata.begin(), leaf->slotdata.end(),
-                std::make_pair(key, std::string()),
-                [](const std::pair<std::string, std::string>& pair1, const std::pair<std::string, std::string>& pair2) {
-                    return pair1.first < pair2.first;
-                }
-            ) - leaf->slotdata.begin();
+            unsigned short slot = find_lower(leaf, key);
 
             if (!allow_duplicates &&
                 slot < leaf->slotuse && key_equal(key, leaf->key(slot))) {
@@ -2062,20 +2091,17 @@ private:
                     leaf = static_cast<LeafNode*>(*splitnode);
                 }
             }
-            leaf->slotdata.reserve(leaf->slotdata.size() + 1);
-            leaf->slotdata.insert(leaf->slotdata.begin() + slot, value);
-            leaf->slotuse++;
-            // stats_.max_capacity = TLX_BTREE_MAX(stats_.max_capacity, leaf->slotdata.capacity());
 
             // move items and put data item into correct data slot
             TLX_BTREE_ASSERT(slot >= 0 && slot <= leaf->slotuse);
+            leaf->resize(1);
 
-            // std::copy_backward(
-            //     leaf->slotdata + slot, leaf->slotdata + leaf->slotuse,
-            //     leaf->slotdata + leaf->slotuse + 1);
+            std::copy_backward(
+                leaf->slotdata + slot, leaf->slotdata + leaf->slotuse,
+                leaf->slotdata + leaf->slotuse + 1);
 
-            // leaf->slotdata[slot] = value;
-            // leaf->slotuse++;
+            leaf->slotdata[slot] = value;
+            leaf->slotuse++;
 
             if (splitnode && leaf != *splitnode && slot == leaf->slotuse - 1)
             {
@@ -2111,10 +2137,9 @@ private:
             newleaf->next_leaf->prev_leaf = newleaf;
         }
 
-        // std::copy(leaf->slotdata + mid, leaf->slotdata + leaf->slotuse,
-        //           newleaf->slotdata);
-        std::copy(leaf->slotdata.begin() + mid, leaf->slotdata.end(), std::back_inserter(newleaf->slotdata));
-        leaf->slotdata.erase(leaf->slotdata.begin() + mid, leaf->slotdata.end());
+        std::copy(leaf->slotdata + mid, leaf->slotdata + leaf->slotuse,
+                  newleaf->slotdata);
+
         leaf->slotuse = mid;
         leaf->next_leaf = newleaf;
         newleaf->prev_leaf = leaf;
@@ -2491,7 +2516,6 @@ private:
 
             std::copy(leaf->slotdata + slot + 1, leaf->slotdata + leaf->slotuse,
                       leaf->slotdata + slot);
-
             leaf->slotuse--;
 
             result_t myres = btree_ok;
@@ -2524,7 +2548,6 @@ private:
             if (leaf->is_underflow() && !(leaf == root_ && leaf->slotuse >= 1))
             {
                 // determine what to do about the underflow
-
                 // case : if this empty leaf is the root, then delete all nodes
                 // and set root to nullptr.
                 if (left_leaf == nullptr && right_leaf == nullptr)
@@ -2830,7 +2853,7 @@ private:
 
             std::copy(leaf->slotdata + slot + 1, leaf->slotdata + leaf->slotuse,
                       leaf->slotdata + slot);
-
+            // shrink(leaf);
             leaf->slotuse--;
 
             result_t myres = btree_ok;
@@ -3167,6 +3190,8 @@ private:
 
         TLX_BTREE_ASSERT(left->slotuse + right->slotuse < leaf_slotmax);
 
+
+        left->resize(right->slotuse);
         std::copy(right->slotdata, right->slotdata + right->slotuse,
                   left->slotdata + left->slotuse);
 
@@ -3255,7 +3280,7 @@ private:
 
         // copy the first items from the right node to the last slot in the left
         // node.
-
+        left->resize(shiftnum);
         std::copy(right->slotdata, right->slotdata + shiftnum,
                   left->slotdata + left->slotuse);
 
@@ -3382,7 +3407,7 @@ private:
         // shift all slots in the right node
 
         TLX_BTREE_ASSERT(right->slotuse + shiftnum < leaf_slotmax);
-
+        right->resize(shiftnum);
         std::copy_backward(right->slotdata, right->slotdata + right->slotuse,
                            right->slotdata + right->slotuse + shiftnum);
 
