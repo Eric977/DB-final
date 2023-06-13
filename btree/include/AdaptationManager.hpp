@@ -7,6 +7,9 @@
 #include <queue>
 #include <vector>
 
+#define SAMPLESIZE 10000
+#define SKIPLENGTH 20
+
 using namespace std;
 #define HISTORYSIZE 1
 template <class Index, typename Identifier, typename Context>
@@ -22,7 +25,8 @@ public:
     struct AccessStats {
         size_t reads;
         size_t writes;
-        bitset<HISTORYSIZE> last_classifications;
+        // bitset<HISTORYSIZE> last_classifications;
+        bool last_classifications;
         int last_epoch;
     };
 
@@ -30,8 +34,8 @@ public:
         : index_(index), current_epoch_(0) {
 //             template <class Index, typename Identifier, typename Context>
 // std::atomic<size_t> AdaptationManager<Index, Identifier, Context>::global_skip_length_{10};
-            global_skip_length_ = {2};
-
+            global_skip_length_ = {SKIPLENGTH};
+            global_sample_size_ = {SAMPLESIZE};
         }
 
     bool IsSample() {
@@ -60,15 +64,14 @@ public:
     }
 
 private:
-    void Classify(); // Implement your classification logic here...
-    void Adapt() {
-        // Implement your adaptation logic here...
-    }
+    void Classify(); 
+    void Adapt();    
     atomic<size_t> global_skip_length_; // Adaptive parameter
     static thread_local size_t skip_length;
+    static thread_local size_t sample_size;
     atomic<size_t> global_sample_size_; // Adaptive parameter
     unordered_map<Identifier, pair<AccessStats, Context>> samples_; // Todo: change to hashmap
-    // BloomFilter<Identifier> filter_;
+    // BloomFilter<Identifier> filter_; //Todo: add thie
     Index *index_;
     int current_epoch_;
 };
@@ -84,7 +87,8 @@ void AdaptationManager<Index, Identifier, Context>::Classify() {
         return a.second.reads + a.second.writes > b.second.reads + b.second.writes;
     };
 
-    size_t k = 20; // Set the value for k
+    size_t k = 2
+    ; // Set the value for k
     priority_queue<pair<Identifier, AccessStats>, vector<pair<Identifier, AccessStats>>, decltype(comp)> pq(comp);
 
     for (auto &sample : samples_) {
@@ -114,7 +118,7 @@ void AdaptationManager<Index, Identifier, Context>::Classify() {
 
     // All samples remaining in the queue are classified as hot
     while (!pq.empty()) {
-        samples_[pq.top().first].last_classifications = true;
+        samples_[pq.top().first].first.last_classifications = true;
         pq.pop();
     }
 }
@@ -131,7 +135,37 @@ void AdaptationManager<Index, Identifier, Context>::Track(const Identifier &id, 
         break;
     }
     samples_[id].first.last_epoch = current_epoch_;
+    sample_size ++;
+
+    if (sample_size >= global_sample_size_){
+        sample_size = 0;
+        Classify();
+        Adapt();
+    }
 };
+
+template <class Index, typename Identifier, typename Context>
+void AdaptationManager<Index, Identifier, Context>::Adapt() {
+    cout << "start adapt: \n";
+    int cnt = 0;
+    for (auto &sample : samples_){
+        // cout << sample.first << "\n";
+        if (sample.second.first.last_classifications){
+            cout << "Hot Node: ";
+            cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
+            cnt ++;
+        }
+        // else{
+        //     cout << "Cold Node: ";
+        //     cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
+        // }
+    }
+    cout << "sample size = " << samples_.size() << "\n";
+    cout << "hot ratio " << (double)cnt / samples_.size() << "\n";
+    samples_.clear();
+
+    return;
+}
 
 // 74, change the operator's direction ('<' => '>)
 // 94, fist => first
