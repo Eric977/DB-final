@@ -47,7 +47,7 @@ void strToUint32(std::vector<uint32_t> &vstr, std::vector<std::string> strs, int
     for (std::string str : strs) {       
         for (int i = 0; i < strSize; i += 4){
             uint32_t tmp = 0;
-            for (int j = 0; j < 4; j ++){
+            for (int j = 0; j < 4; j++){
                 tmp = tmp << 8;
                 if (i + j < str.size())
                     tmp += str[i + j];
@@ -68,7 +68,7 @@ void uint32ToStr(std::vector<uint32_t> vstr, std::vector<std::string> &str, int 
         std::string tmpStr;
 
         for (int i = 0; i < tmpVec.size(); i++){
-            for (int j = 0; j < 4; j ++){
+            for (int j = 0; j < 4; j++){
                 tmpStr += (char)(tmpVec[i] >> (24 - j * 8));
             }
         }
@@ -114,7 +114,7 @@ std::vector<char> lz4_compress(std::vector<T>& data, int& srcSize) {
 
         compressed.resize(compressedSize);
 
-        std::cout << "Compressed size: " << compressedSize << "\n";
+        std::cout << "Compressed size: " << compressedSize << " bytes" << "\n";
         return compressed;
     }
     else {
@@ -137,7 +137,7 @@ std::vector<T> lz4_decompress(std::vector<char>& compressed, int originalSize, i
         // postprocess data
         std::vector<T> decompressed = char_array_to_data(formatted_decompressed, vectorSize);
 
-        std::cout << "Decompressed size: " << decompressedSize << "\n";
+        std::cout << "Decompressed size: " << decompressedSize << " bytes" << "\n";
         return decompressed;
     }
     else {
@@ -146,16 +146,17 @@ std::vector<T> lz4_decompress(std::vector<char>& compressed, int originalSize, i
 }
 
 template<typename T>
-std::vector<char> snappy_compress(std::vector<T>& data) {
+std::vector<char> snappy_compress(std::vector<T>& data, int& srcSize) {
     if (std::is_same<T, std::pair<std::string, std::string>>::value) {
         // preprocess data
         std::vector<char> formatted_data = data_to_char_array(data);
+        srcSize = formatted_data.size();
 
         std::string compressed;
         snappy::Compress(formatted_data.data(), formatted_data.size(), &compressed);
 
         std::vector<char> compressedVec(compressed.begin(), compressed.end());
-        std::cout << "Compressed size: " << compressedVec.size() << "\n";
+        std::cout << "Compressed size: " << compressedVec.size() << " bytes" << "\n";
         return compressedVec;
     }
     else {
@@ -175,7 +176,7 @@ std::vector<T> snappy_decompress(std::vector<char>& compressed, int originalSize
         // postprocess data
         std::vector<T> decompressed = char_array_to_data(formatted_decompressed, vectorSize);
 
-        std::cout << "Decompressed size: " << decompressed.size() * sizeof(T) << "\n";
+        std::cout << "Decompressed size: " << originalSize << " bytes" << "\n";
         return decompressed;
     }
     else {
@@ -184,7 +185,8 @@ std::vector<T> snappy_decompress(std::vector<char>& compressed, int originalSize
 }
 
 template<typename T>
-std::vector<std::pair<uint32_t, uint32_t>> fastpfor_compress(std::vector<T> &data, int &srcSize){
+void fastpfor_compress(std::vector<uint32_t>& k, std::vector<uint32_t>& v, 
+            std::vector<T>& data, int& srcSize){
     if (std::is_same<T, std::pair<std::string, std::string>>::value) {
         std::vector<std::pair<uint32_t, uint32_t>> uint_data;
         std::vector<uint32_t> uint_keys, uint_values;
@@ -195,9 +197,36 @@ std::vector<std::pair<uint32_t, uint32_t>> fastpfor_compress(std::vector<T> &dat
         strToUint32(uint_keys, keys, srcSize);
         strToUint32(uint_values, values, srcSize);
 
-        twoVecToPair<uint32_t>(uint_data, uint_keys, uint_values);
+        // compress data
+        using namespace FastPForLib;
+        CODECFactory factory;
+        IntegerCODEC &codec = *factory.getFromName("simdfastpfor256");
 
-        return uint_data;
+        std::vector<uint32_t> compressedKeys(uint_keys.size() + 1024);
+        std::vector<uint32_t> compressedValues(uint_values.size() + 1024);
+        size_t keysSize = compressedKeys.size();
+        size_t valuesSize = compressedValues.size();
+
+        codec.encodeArray(uint_keys.data(), uint_keys.size(), compressedKeys.data(),
+                            keysSize);
+        codec.encodeArray(uint_values.data(), uint_values.size(), compressedValues.data(),
+                            valuesSize);
+        
+        compressedKeys.resize(keysSize);
+        compressedValues.resize(valuesSize);
+        compressedKeys.shrink_to_fit();
+        compressedValues.shrink_to_fit();
+        k = compressedKeys;
+        v = compressedValues;
+
+        // std::cout << compressedKeys.size() << " " << compressedValues.size() << std::endl;
+
+        // display compression rate:
+        std::cout << std::setprecision(3);
+        std::cout << "You are using "
+                    << 32.0 * static_cast<double>(compressedKeys.size() + compressedValues.size()) /
+                        static_cast<double>(uint_keys.size() + uint_values.size())
+                    << " bits per integer. " << std::endl;
     }
     else {
         throw std::invalid_argument("fastpfor_compress: unsupported type");
@@ -205,17 +234,33 @@ std::vector<std::pair<uint32_t, uint32_t>> fastpfor_compress(std::vector<T> &dat
 }
 
 template<typename T>
-std::vector<T> fastpfor_decompress(std::vector<std::pair<uint32_t, uint32_t>> &uint_data, int srcSize){
-    std::vector<uint32_t> uint_keys, uint_values;
+std::vector<T> fastpfor_decompress(std::vector<uint32_t> uint_keys, std::vector<uint32_t> uint_values, 
+                                    int srcSize, int vectorSize){
     std::vector<std::string> keys, values;
     std::vector<T> data;
 
-    pairToTwoVec<uint32_t>(uint_data, uint_keys, uint_values);
+    // std::cout << uint_keys.size() << " " << uint_values.size() << "\n";
 
-    uint32ToStr(uint_keys, keys, srcSize);
-    uint32ToStr(uint_values, values, srcSize);
+    // decompress data
+    using namespace FastPForLib;
+    CODECFactory factory;
+    IntegerCODEC &codec = *factory.getFromName("simdfastpfor256");
+
+    std::vector<uint32_t> originalKeys(vectorSize * srcSize / 4);
+    std::vector<uint32_t> originalValues(vectorSize * srcSize / 4);
+    size_t keysSize = originalKeys.size();
+    size_t valuesSize = originalValues.size();
+
+    codec.decodeArray(uint_keys.data(), uint_keys.size(), originalKeys.data(), keysSize);
+    codec.decodeArray(uint_values.data(), uint_values.size(), originalValues.data(), valuesSize);
+    
+    originalKeys.resize(keysSize);
+    originalValues.resize(valuesSize);
+
+    uint32ToStr(originalKeys, keys, srcSize);
+    uint32ToStr(originalValues, values, srcSize);
 
     twoVecToPair<std::string>(data, keys, values);
-
+    
     return data;
 }

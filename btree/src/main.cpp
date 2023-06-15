@@ -11,6 +11,10 @@
 #include "../include/encode.hpp"
 #include "../include/btree_map.hpp"
 
+#include <codecfactory.h>
+#include <deltautil.h>
+#include <fastpfor.h>
+
 using namespace std;
 
 void loadKVpair(string file, vector<string>& keys, vector<string>& values){
@@ -80,7 +84,7 @@ int main(){
 
     // snappy compression
     int snappy_srcSize = 0;
-    vector<char> snappy_compressed = snappy_compress<pair<string, string>>(original);
+    vector<char> snappy_compressed = snappy_compress<pair<string, string>>(original, snappy_srcSize);
     vector<pair<string, string>> snappy_decompressed = snappy_decompress<pair<string, string>>(snappy_compressed, snappy_srcSize, original.size());
     for (const auto& val : snappy_decompressed) {
         std::cout << val.first << " " << val.second << " " << std::endl;
@@ -88,9 +92,12 @@ int main(){
     cout << endl;
 
     // fastpfor compression
-    int fastpfor_srcSize = 24;  // should be multiple of 4
-    vector<pair<uint32_t, uint32_t>> fastpfor_compressed = fastpfor_compress<pair<string, string>>(original, fastpfor_srcSize);
-    vector<pair<string, string>> fastpfor_decompressed = fastpfor_decompress<pair<string, string>>(fastpfor_compressed, fastpfor_srcSize);
+    int fastpfor_srcSize = 24;  // length for each string, should be multiple of 4
+    vector<uint32_t> compressedKeys;
+    vector<uint32_t> compressedValues;
+    fastpfor_compress<pair<string, string>>(compressedKeys, compressedValues, original, fastpfor_srcSize);
+    vector<pair<string, string>> fastpfor_decompressed = 
+        fastpfor_decompress<pair<string, string>>(compressedKeys, compressedValues, fastpfor_srcSize, original.size());
     for (const auto& val : fastpfor_decompressed) {
         std::cout << val.first << " " << val.second << " " << std::endl;
     }
