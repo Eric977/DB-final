@@ -27,6 +27,7 @@
 
 #define NODESIZE 1024
 
+//! Hybrid index
 template <class Index, typename Identifier, typename Context>
 thread_local size_t AdaptationManager<Index, Identifier, Context>::skip_length = 3;
 
@@ -223,6 +224,8 @@ private:
     //! The header structure of each node in-memory. This structure is extended
     //! by InnerNode or LeafNode.
     struct node {
+        //! virtual function
+        virtual ~node() {}
         //! Level in the b-tree, if level == 0 -> leaf node
         unsigned short level;
 
@@ -239,6 +242,15 @@ private:
         //! True if this is a leaf node.
         bool is_leafnode() const {
             return (level == 0);
+        }
+
+        //! Hybrid indedx
+        bool is_gapped() const{
+            return dynamic_cast<const LeafNode*>(this) != nullptr;
+        }
+
+        bool is_packed() const{
+            return dynamic_cast<const PackedLeafNode*>(this) != nullptr;
         }
     };
 
@@ -293,14 +305,11 @@ private:
         LeafNode* next_leaf;
 
         //! Array of (key, data) pairs
-        // value_type slotdata[leaf_slotmax]; // NOLINT
-        value_type* slotdata;
+        value_type slotdata[leaf_slotmax]; // NOLINT
         //! Set variables to initial values
         void initialize() {
             node::initialize(0);
             prev_leaf = next_leaf = nullptr;
-            // slotdata = static_slotdata;
-            slotdata = new value_type[leaf_slotmax];
         }
 
         //! Return key in slot s.
@@ -329,26 +338,122 @@ private:
             TLX_BTREE_ASSERT(slot < node::slotuse);
             slotdata[slot] = value;
         }
+        //! Hybrid Index
+        ~LeafNode(){
+
+        }
     };
+
+    //! Hybrid Index: packed leaf node
+    struct PackedLeafNode : public node {
+        //! Define an related allocator for the LeafNode structs.
+        typedef typename std::allocator_traits<Allocator>::template rebind_alloc<PackedLeafNode> alloc_type;
+
+        //! Double linked list pointers to traverse the leaves
+        LeafNode* prev_leaf;
+
+        //! Double linked list pointers to traverse the leaves
+        LeafNode* next_leaf;
+
+        //! Array of (key, data) pairs
+        value_type* slotdata;
+        //! Set variables to initial values
+        void initialize(size_t size) {
+            node::initialize(0);
+            prev_leaf = next_leaf = nullptr;
+            slotdata = new value_type[size];
+            node::slotuse = size;
+        }
+
+        //! Return key in slot s.
+        const key_type& key(size_t s) const {
+            return key_of_value::get(slotdata[s]);
+        }
+
+        //! True if the node's slots are full.
+        bool is_full() const {
+            return (node::slotuse == leaf_slotmax);
+        }
+
+        //! True if few used entries, less than half full.
+        bool is_few() const {
+            return (node::slotuse <= leaf_slotmin);
+        }
+
+        //! True if node has too few entries.
+        bool is_underflow() const {
+            return (node::slotuse < leaf_slotmin);
+        }
+
+        //! Set the (key,data) pair in slot. Overloaded function used by
+        //! bulk_load().
+        void set_slot(unsigned short slot, const value_type& value) {
+            TLX_BTREE_ASSERT(slot < node::slotuse);
+            slotdata[slot] = value;
+        }
+    
+        //! extend k slot in the packed array
+        void resize(unsigned int k){
+            if (node::slotuse + k > leaf_slotmax)
+                return;
+            value_type* new_slotdata = new value_type[node::slotuse+k];
+            std::copy(slotdata, slotdata + node::slotuse, new_slotdata);
+            delete []slotdata;
+            slotdata = new_slotdata;
+        }
+
+        //! shrink k slot in the packed array
+        void shrink(unsigned int k){
+            if (node::slotuse < k)
+                return;
+            value_type* new_slotdata = new value_type[node::slotuse - k];
+            std::copy(slotdata, slotdata + node::slotuse - k, new_slotdata);
+            delete []slotdata;
+            slotdata = new_slotdata;
+        }
+    };
+
+    //! Hybrid Index: succinct leaf node
+    // To do
 
     //! \}
 public:
-    //! Adaptive Hybrid Indexm
-    friend class AdaptationManager;
-    typedef typename AdaptationManager<
+    //! Hybrid Index: AdaptationManager
+    // friend class AdaptationManager;
+    enum EncodingSchema{
+        gapped,
+        packed,
+        succinct
+    };
+
+    friend class AdaptationManager<
         BTree<Key, Value, KeyOfValue, Compare, Traits, Duplicates, Allocator>,
-        node*,
-        node*>::AccessType AdaptationAccessType;
+        node*, InnerNode*>;
+
     typedef AdaptationManager<
         BTree<Key, Value, KeyOfValue, Compare, Traits, Duplicates, Allocator>,
         node*,
-        node*> AdaptationManagerType;
-    AdaptationManager<BTree<Key, Value, KeyOfValue, Compare, Traits, Duplicates, Allocator>, node *, node *> adapt_manager_;
-
+        InnerNode*> AdaptationManagerType;
+    typedef typename AdaptationManagerType::AccessType AdaptationAccessType;
+    // AdaptationManager<BTree<Key, Value, KeyOfValue, Compare, Traits, Duplicates, Allocator>, node *, node *> adapt_manager_;
+    AdaptationManagerType adapt_manager_;
 private:
     size_t GetUseMemory();
     // Encoding EvaluateHeuristic(const AccessStats &);
-    // void Encode(Node *, EncodingSchema &, Node *);
+    void Encode(node *n, EncodingSchema encode, InnerNode *parent, unsigned int parentslot){
+        if (n->is_gapped() && encode == packed){
+            LeafNode * leaf = static_cast<LeafNode *>(n); 
+            PackedLeafNode *packed_leaf = allocate_packed(n->slotuse);
+            packed_leaf->prev_leaf = leaf->prev_leaf;
+            packed_leaf->next_leaf = leaf->next_leaf;
+
+            std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse,
+                      packed_leaf->slotdata);
+            free_node(n);
+            parent->childid[parentslot] = packed_leaf;
+        }
+        return;
+    }
 
 public:
     //! \name Iterators and Reverse Iterators
@@ -1076,6 +1181,9 @@ public:
         //! Number of inner nodes in the B+ tree
         size_type inner_nodes;
 
+        //! Number of packeds node in the B+ tree
+        size_type packeds;
+
         //! Base B+ tree parameter: The number of key/data slots in each leaf
         static const unsigned short leaf_slots = Self::leaf_slotmax;
 
@@ -1085,12 +1193,12 @@ public:
         //! Zero initialized
         tree_stats()
             : size(0),
-              leaves(0), inner_nodes(0)
+              leaves(0), inner_nodes(0), packeds(0)
         { }
 
         //! Return the total number of nodes
         size_type nodes() const {
-            return inner_nodes + leaves;
+            return inner_nodes + leaves + packeds;
         }
 
         //! Return the average fill of leaves
@@ -1281,12 +1389,20 @@ private:
         return typename InnerNode::alloc_type(allocator_);
     }
 
+    //! Hybrid Index
+    //! Return an allocator for PackedLeafNode objects.
+    typename PackedLeafNode::alloc_type packed_leaf_node_allocator(){
+        return typename PackedLeafNode::alloc_type(allocator_);
+    }
+
     //! Allocate and initialize a leaf node
     LeafNode * allocate_leaf() {
         LeafNode* n = new (leaf_node_allocator().allocate(1)) LeafNode();
+        // LeafNode* n = new LeafNode();
         n->initialize();
         stats_.leaves++;
         return n;
+
     }
 
     //! Allocate and initialize an inner node
@@ -1297,17 +1413,36 @@ private:
         return n;
     }
 
+    //! Hybrid Index
+    //! Allocate and initialize an packed leaf node
+    PackedLeafNode * allocate_packed(size_t size){
+        PackedLeafNode* n = new(packed_leaf_node_allocator().allocate(1)) PackedLeafNode();
+        n->initialize(size);
+        stats_.packeds++;
+         // Todo: seperate packed stats
+        return n;
+    }
+
     //! Correctly free either inner or leaf node, destructs all contained key
     //! and value objects.
     void free_node(node* n) {
-        if (n->is_leafnode()) {
+        if (n->is_gapped()) {
             LeafNode* ln = static_cast<LeafNode*>(n);
             typename LeafNode::alloc_type a(leaf_node_allocator());
             std::allocator_traits<typename LeafNode::alloc_type>::destroy(a, ln);
             std::allocator_traits<typename LeafNode::alloc_type>::deallocate(a, ln, 1);
+            // delete ln;
             stats_.leaves--;
         }
-        else {
+        else if (n->is_packed()){
+            PackedLeafNode* pln = static_cast<PackedLeafNode*>(n);
+            delete []pln->slotdata;
+            typename PackedLeafNode::alloc_type a(packed_leaf_node_allocator());
+            std::allocator_traits<typename PackedLeafNode::alloc_type>::destroy(a, pln);
+            std::allocator_traits<typename PackedLeafNode::alloc_type>::deallocate(a, pln, 1);
+            stats_.packeds--; // Todo: separate packed stats
+        }
+        else{
             InnerNode* in = static_cast<InnerNode*>(n);
             typename InnerNode::alloc_type a(inner_node_allocator());
             std::allocator_traits<typename InnerNode::alloc_type>::destroy(a, in);
@@ -1540,6 +1675,8 @@ public:
 
     //! Return a const reference to the current statistics.
     const struct tree_stats& get_stats() const {
+        // cout << " = " << sizeof(PackedLeafNode) << "\n";
+        // cout << " = " << leaf_slotmax << "\n";
         return stats_;
     }
 
@@ -1575,19 +1712,21 @@ public:
         node* n = root_;
         if (!n) return end();
 
+        InnerNode* inner = nullptr;
+        unsigned short slot;
         while (!n->is_leafnode())
         {
-            const InnerNode* inner = static_cast<const InnerNode*>(n);
-            unsigned short slot = find_lower(inner, key);
-
+            inner = static_cast<InnerNode*>(n);
+            slot = find_lower(inner, key);
             n = inner->childid[slot];
         }
 
+        //! Hybrid index
         LeafNode* leaf = static_cast<LeafNode*>(n);
         if (adapt_manager_.IsSample()){
-            adapt_manager_.Track(leaf, AdaptationAccessType::READ);
+            adapt_manager_.Track(leaf, AdaptationAccessType::READ, inner, slot);
         }
-        unsigned short slot = find_lower(leaf, key);
+        slot = find_lower(leaf, key);
         return (slot < leaf->slotuse && key_equal(key, leaf->key(slot)))
                ? iterator(leaf, slot) : end();
     }

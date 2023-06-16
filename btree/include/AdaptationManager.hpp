@@ -6,15 +6,19 @@
 #include <bitset>
 #include <queue>
 #include <vector>
+#include "btree_hybrid.hpp"
 
-#define SAMPLESIZE 10000
-#define SKIPLENGTH 20
+#define SAMPLESIZE 100
+
+#define SKIPLENGTH 5
+#define K 20
 
 using namespace std;
 #define HISTORYSIZE 1
 template <class Index, typename Identifier, typename Context>
 class AdaptationManager {
 public:
+    friend class Btree;
     enum AccessType {
         READ,
         WRITE,
@@ -39,7 +43,6 @@ public:
         }
 
     bool IsSample() {
-        // std::cout << skip_length << "\n";
         if (--skip_length == 0)
         {
             skip_length = global_skip_length_.load(); // synchronized
@@ -48,8 +51,7 @@ public:
         return false;
     }
 
-    void Track(const Identifier &id, AccessType type);
-
+    void Track(const Identifier &id, AccessType type, Context& context, unsigned int slot);
     void UpdateContext(const Identifier &id, Context &context) {
         // Implement your context updating logic here...
     }
@@ -70,7 +72,7 @@ private:
     static thread_local size_t skip_length;
     static thread_local size_t sample_size;
     atomic<size_t> global_sample_size_; // Adaptive parameter
-    unordered_map<Identifier, pair<AccessStats, Context>> samples_; // Todo: change to hashmap
+    unordered_map<Identifier, pair<AccessStats, pair<Context,unsigned int>>> samples_; // Todo: change to hashmap
     // BloomFilter<Identifier> filter_; //Todo: add thie
     Index *index_;
     int current_epoch_;
@@ -87,8 +89,7 @@ void AdaptationManager<Index, Identifier, Context>::Classify() {
         return a.second.reads + a.second.writes > b.second.reads + b.second.writes;
     };
 
-    size_t k = 2
-    ; // Set the value for k
+    size_t k = K; // Set the value for k
     priority_queue<pair<Identifier, AccessStats>, vector<pair<Identifier, AccessStats>>, decltype(comp)> pq(comp);
 
     for (auto &sample : samples_) {
@@ -123,47 +124,45 @@ void AdaptationManager<Index, Identifier, Context>::Classify() {
     }
 }
 template <class Index, typename Identifier, typename Context>
-void AdaptationManager<Index, Identifier, Context>::Track(const Identifier &id, AccessType type) {
+void AdaptationManager<Index, Identifier, Context>::Track(const Identifier &id, AccessType type, Context& context, unsigned int slot) {
+    auto& sample = samples_[id];
+    
+    sample.second = make_pair(context, slot);
     switch (type) {
     case READ:
-        samples_[id].first.reads++;
+        sample.first.reads++;
         break;
     case WRITE:
-        samples_[id].first.writes++;
+        sample.first.writes++;
         break;
     default:
         break;
     }
-    samples_[id].first.last_epoch = current_epoch_;
-    sample_size ++;
 
-    if (sample_size >= global_sample_size_){
+    sample.first.last_epoch = current_epoch_;
+    sample_size++;
+
+    if (sample_size >= global_sample_size_) {
         sample_size = 0;
         Classify();
         Adapt();
     }
-};
+}
 
 template <class Index, typename Identifier, typename Context>
 void AdaptationManager<Index, Identifier, Context>::Adapt() {
-    cout << "start adapt: \n";
     int cnt = 0;
     for (auto &sample : samples_){
-        // cout << sample.first << "\n";
-        if (sample.second.first.last_classifications){
-            cout << "Hot Node: ";
-            cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
+        // Cold Node
+        if (!sample.second.first.last_classifications){
+            // cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
             cnt ++;
+            index_->Encode(sample.first, Index::EncodingSchema::packed ,sample.second.second.first, sample.second.second.second);
         }
-        // else{
-        //     cout << "Cold Node: ";
-        //     cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
-        // }
     }
-    cout << "sample size = " << samples_.size() << "\n";
-    cout << "hot ratio " << (double)cnt / samples_.size() << "\n";
+    // cout << "hot ratio " << (double)cnt / samples_.size() << "\n";
     samples_.clear();
-
+    
     return;
 }
 
