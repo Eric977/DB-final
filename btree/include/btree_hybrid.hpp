@@ -13,6 +13,7 @@
 
 #include "AdaptationManager.hpp"
 #include "core.hpp"
+#include "encode.hpp"
 
 // *** Required Headers from the STL
 
@@ -24,6 +25,8 @@
 #include <memory>
 #include <ostream>
 #include <utility>
+#include <lz4.h>
+#include <snappy.h>
 
 #define NODESIZE 1024
 
@@ -245,12 +248,17 @@ private:
         }
 
         //! Hybrid indedx
+        //! Type of leaf node
         bool is_gapped() const{
             return dynamic_cast<const LeafNode*>(this) != nullptr;
         }
 
         bool is_packed() const{
             return dynamic_cast<const PackedLeafNode*>(this) != nullptr;
+        }
+
+        bool is_succinct() const{
+            return dynamic_cast<const SuccinctLeafNode*>(this) != nullptr;
         }
     };
 
@@ -306,10 +314,12 @@ private:
 
         //! Array of (key, data) pairs
         value_type slotdata[leaf_slotmax]; // NOLINT
+        // value_type* slotdata;
         //! Set variables to initial values
         void initialize() {
             node::initialize(0);
             prev_leaf = next_leaf = nullptr;
+            // slotdata = new value_type[leaf_slotmax];
         }
 
         //! Return key in slot s.
@@ -337,10 +347,6 @@ private:
         void set_slot(unsigned short slot, const value_type& value) {
             TLX_BTREE_ASSERT(slot < node::slotuse);
             slotdata[slot] = value;
-        }
-        //! Hybrid Index
-        ~LeafNode(){
-
         }
     };
 
@@ -414,7 +420,61 @@ private:
     };
 
     //! Hybrid Index: succinct leaf node
-    // To do
+    struct SuccinctLeafNode : public node {
+        //! Define an related allocator for the LeafNode structs.
+        typedef typename std::allocator_traits<Allocator>::template rebind_alloc<SuccinctLeafNode> alloc_type;
+
+        //! Double linked list pointers to traverse the leaves
+        LeafNode* prev_leaf;
+
+        //! Double linked list pointers to traverse the leaves
+        LeafNode* next_leaf;
+
+        //! Compressed data
+        vector<char> slotdata;
+
+        //! Size of uncompressed data
+        int src_size;
+        //! Set variables to initial values
+        void initialize() {
+            node::initialize(0);
+            prev_leaf = next_leaf = nullptr;
+        }
+
+        //! Return key in slot s.
+        const key_type& key(size_t s) const {
+            return key_of_value::get(slotdata[s]);
+        }
+
+        //! True if the node's slots are full.
+        bool is_full() const {
+            return (node::slotuse == leaf_slotmax);
+        }
+
+        //! True if few used entries, less than half full.
+        bool is_few() const {
+            return (node::slotuse <= leaf_slotmin);
+        }
+
+        //! True if node has too few entries.
+        bool is_underflow() const {
+            return (node::slotuse < leaf_slotmin);
+        }
+
+        //! Set the (key,data) pair in slot. Overloaded function used by
+        //! bulk_load().
+
+
+        //! Set the original slotdata to succinct array
+        void compress_data(value_type* data){
+            slotdata = lz4_compress<value_type>(data, node::slotuse, src_size);
+        }
+
+        void decompress_data(value_type* data){
+            lz4_decompress<value_type>(slotdata, src_size, data, node::slotuse);
+            return;
+        }
+    };
 
     //! \}
 public:
@@ -441,17 +501,47 @@ private:
     size_t GetUseMemory();
     // Encoding EvaluateHeuristic(const AccessStats &);
     void Encode(node *n, EncodingSchema encode, InnerNode *parent, unsigned int parentslot){
-        if (n->is_gapped() && encode == packed){
+        if (n->is_gapped()){
             LeafNode * leaf = static_cast<LeafNode *>(n); 
-            PackedLeafNode *packed_leaf = allocate_packed(n->slotuse);
-            packed_leaf->prev_leaf = leaf->prev_leaf;
-            packed_leaf->next_leaf = leaf->next_leaf;
-
-            std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse,
-                      packed_leaf->slotdata);
+            if (encode == packed){
+                PackedLeafNode* new_leaf = allocate_packed(leaf->slotuse);
+                new_leaf->prev_leaf = leaf->prev_leaf;
+                new_leaf->next_leaf = leaf->next_leaf;
+                std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
+                // cout << "slot use = " << new_leaf->slotuse << "\n";
+                parent->childid[parentslot] = new_leaf;
+            }
+            else if (encode == succinct){
+                SuccinctLeafNode *new_leaf = allocate_succinct();
+                new_leaf->prev_leaf = leaf->prev_leaf;
+                new_leaf->next_leaf = leaf->next_leaf;
+                new_leaf->slotuse = leaf->slotuse;
+                new_leaf->compress_data(leaf->slotdata);
+                parent->childid[parentslot] = new_leaf;
+            }
             free_node(n);
-            parent->childid[parentslot] = packed_leaf;
         }
+        else if (n->is_succinct()){
+            SuccinctLeafNode * leaf = static_cast<SuccinctLeafNode *>(n);
+            LeafNode* new_leaf = allocate_leaf();
+            new_leaf->prev_leaf = leaf->prev_leaf;
+            new_leaf->next_leaf = leaf->next_leaf;
+            new_leaf->slotuse = leaf->slotuse;
+            leaf->decompress_data(new_leaf->slotdata);
+            parent->childid[parentslot] = new_leaf;
+            free_node(n);
+        }
+        else if (n->is_packed()){
+            PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n);
+            LeafNode* new_leaf = allocate_leaf();
+            new_leaf->prev_leaf = leaf->prev_leaf;
+            new_leaf->next_leaf = leaf->next_leaf;
+            new_leaf->slotuse = leaf->slotuse;
+            copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
+            parent->childid[parentslot] = new_leaf;
+            free_node(n);
+        }
+
         return;
     }
 
@@ -536,6 +626,11 @@ public:
         iterator(typename BTree::LeafNode* l, unsigned short s)
             : curr_leaf(l), curr_slot(s)
         { }
+
+        // //! Hybrid Index
+        // iterator(typename BTree::PackedLeafNode* l, unsigned short s)
+        //     : curr_leaf(l), curr_slot(s)
+        // { }
 
         //! Copy-constructor from a reverse iterator
         iterator(const reverse_iterator& it) // NOLINT
@@ -1181,9 +1276,11 @@ public:
         //! Number of inner nodes in the B+ tree
         size_type inner_nodes;
 
-        //! Number of packeds node in the B+ tree
+        //! Number of packed leaves in the B+ tree
         size_type packeds;
 
+        //! Number of succinct leaves in the B+ tree
+        size_type succincts;
         //! Base B+ tree parameter: The number of key/data slots in each leaf
         static const unsigned short leaf_slots = Self::leaf_slotmax;
 
@@ -1394,6 +1491,10 @@ private:
     typename PackedLeafNode::alloc_type packed_leaf_node_allocator(){
         return typename PackedLeafNode::alloc_type(allocator_);
     }
+    //! Return an allocator for SuccinctLeafNode objects.
+    typename SuccinctLeafNode::alloc_type succinct_leaf_node_allocator(){
+        return typename SuccinctLeafNode::alloc_type(allocator_);
+    }
 
     //! Allocate and initialize a leaf node
     LeafNode * allocate_leaf() {
@@ -1419,15 +1520,21 @@ private:
         PackedLeafNode* n = new(packed_leaf_node_allocator().allocate(1)) PackedLeafNode();
         n->initialize(size);
         stats_.packeds++;
-         // Todo: seperate packed stats
         return n;
     }
 
+    SuccinctLeafNode * allocate_succinct(){
+        SuccinctLeafNode* n = new(succinct_leaf_node_allocator().allocate(1)) SuccinctLeafNode();
+        n->initialize();
+        stats_.succincts++;
+        return n;
+    }
     //! Correctly free either inner or leaf node, destructs all contained key
     //! and value objects.
     void free_node(node* n) {
         if (n->is_gapped()) {
             LeafNode* ln = static_cast<LeafNode*>(n);
+            // delete []ln->slotdata;
             typename LeafNode::alloc_type a(leaf_node_allocator());
             std::allocator_traits<typename LeafNode::alloc_type>::destroy(a, ln);
             std::allocator_traits<typename LeafNode::alloc_type>::deallocate(a, ln, 1);
@@ -1441,6 +1548,13 @@ private:
             std::allocator_traits<typename PackedLeafNode::alloc_type>::destroy(a, pln);
             std::allocator_traits<typename PackedLeafNode::alloc_type>::deallocate(a, pln, 1);
             stats_.packeds--; // Todo: separate packed stats
+        }
+        else if (n->is_succinct()){
+            SuccinctLeafNode* sln = static_cast<SuccinctLeafNode*>(n);
+            typename SuccinctLeafNode::alloc_type a(succinct_leaf_node_allocator());
+            std::allocator_traits<typename SuccinctLeafNode::alloc_type>::destroy(a, sln);
+            std::allocator_traits<typename SuccinctLeafNode::alloc_type>::deallocate(a, sln, 1);
+            stats_.succincts--;
         }
         else{
             InnerNode* in = static_cast<InnerNode*>(n);
@@ -1675,8 +1789,6 @@ public:
 
     //! Return a const reference to the current statistics.
     const struct tree_stats& get_stats() const {
-        // cout << " = " << sizeof(PackedLeafNode) << "\n";
-        // cout << " = " << leaf_slotmax << "\n";
         return stats_;
     }
 
@@ -1722,13 +1834,29 @@ public:
         }
 
         //! Hybrid index
-        LeafNode* leaf = static_cast<LeafNode*>(n);
-        if (adapt_manager_.IsSample()){
-            adapt_manager_.Track(leaf, AdaptationAccessType::READ, inner, slot);
+        if (n->is_succinct()){
+            Encode(n, gapped, inner, slot);
+            n = inner->childid[slot];
         }
-        slot = find_lower(leaf, key);
-        return (slot < leaf->slotuse && key_equal(key, leaf->key(slot)))
-               ? iterator(leaf, slot) : end();
+        if (adapt_manager_.IsSample()){
+            adapt_manager_.Track(n, AdaptationAccessType::READ, inner, slot);
+        }
+
+        if (n->is_gapped()){
+            LeafNode* leaf = static_cast<LeafNode*>(n);
+            slot = find_lower(leaf, key);
+            return (slot < leaf->slotuse && key_equal(key, leaf->key(slot)))
+                ? iterator(leaf, slot) : end();
+        }
+
+        // PackedLeafNode* leaf = static_cast<PackedLeafNode*>(n)
+        
+        ;
+        // slot = find_lower(leaf, key);
+        // return (slot < leaf->slotuse && key_equal(key, leaf->key(slot)))
+        //     ? iterator(leaf, slot) : end();
+        return end();
+
     }
 
     //! Tries to locate a key in the B+ tree and returns an constant iterator to

@@ -11,7 +11,8 @@
 #define SAMPLESIZE 100
 
 #define SKIPLENGTH 5
-#define K 20
+#define K 2
+
 
 using namespace std;
 #define HISTORYSIZE 1
@@ -157,12 +158,15 @@ void AdaptationManager<Index, Identifier, Context>::Adapt() {
         if (!sample.second.first.last_classifications){
             // cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
             cnt ++;
-            index_->Encode(sample.first, Index::EncodingSchema::packed ,sample.second.second.first, sample.second.second.second);
+            index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
         }
+        // else{
+        //     index_->Encode(sample.first, Index::EncodingSchema::gapped, sample.second.second.first, sample.second.second.second);
+        // }
     }
     // cout << "hot ratio " << (double)cnt / samples_.size() << "\n";
     samples_.clear();
-    
+
     return;
 }
 
