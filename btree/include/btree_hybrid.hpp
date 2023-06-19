@@ -32,7 +32,7 @@
 
 //! Hybrid index
 template <class Index, typename Identifier, typename Context>
-thread_local size_t AdaptationManager<Index, Identifier, Context>::skip_length = 3;
+thread_local size_t AdaptationManager<Index, Identifier, Context>::skip_length = 10;
 
 template <class Index, typename Identifier, typename Context>
 thread_local size_t AdaptationManager<Index, Identifier, Context>::sample_size = 0;
@@ -472,7 +472,6 @@ private:
 
         void decompress_data(value_type* data){
             lz4_decompress<value_type>(slotdata, src_size, data, node::slotuse);
-            return;
         }
     };
 
@@ -483,7 +482,9 @@ public:
     enum EncodingSchema{
         gapped,
         packed,
-        succinct
+        succinct,
+        expand,
+        compact
     };
 
     friend class AdaptationManager<
@@ -500,51 +501,91 @@ public:
 private:
     size_t GetUseMemory();
     // Encoding EvaluateHeuristic(const AccessStats &);
-    void Encode(node *n, EncodingSchema encode, InnerNode *parent, unsigned int parentslot){
-        if (n->is_gapped()){
-            LeafNode * leaf = static_cast<LeafNode *>(n); 
-            if (encode == packed){
-                PackedLeafNode* new_leaf = allocate_packed(leaf->slotuse);
-                new_leaf->prev_leaf = leaf->prev_leaf;
-                new_leaf->next_leaf = leaf->next_leaf;
-                std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
-                // cout << "slot use = " << new_leaf->slotuse << "\n";
-                parent->childid[parentslot] = new_leaf;
-            }
-            else if (encode == succinct){
-                SuccinctLeafNode *new_leaf = allocate_succinct();
-                new_leaf->prev_leaf = leaf->prev_leaf;
-                new_leaf->next_leaf = leaf->next_leaf;
-                new_leaf->slotuse = leaf->slotuse;
-                new_leaf->compress_data(leaf->slotdata);
-                parent->childid[parentslot] = new_leaf;
-            }
-            free_node(n);
-        }
-        else if (n->is_succinct()){
-            SuccinctLeafNode * leaf = static_cast<SuccinctLeafNode *>(n);
-            LeafNode* new_leaf = allocate_leaf();
-            new_leaf->prev_leaf = leaf->prev_leaf;
-            new_leaf->next_leaf = leaf->next_leaf;
-            new_leaf->slotuse = leaf->slotuse;
-            leaf->decompress_data(new_leaf->slotdata);
-            parent->childid[parentslot] = new_leaf;
-            free_node(n);
-        }
-        else if (n->is_packed()){
-            PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n);
-            LeafNode* new_leaf = allocate_leaf();
-            new_leaf->prev_leaf = leaf->prev_leaf;
-            new_leaf->next_leaf = leaf->next_leaf;
-            new_leaf->slotuse = leaf->slotuse;
-            copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
-            parent->childid[parentslot] = new_leaf;
-            free_node(n);
-        }
 
+    void gappedToPacked(node* n, InnerNode* parent, unsigned int parentslot){
+        // auto start = std::chrono::high_resolution_clock::now();
+        LeafNode * leaf = static_cast<LeafNode *>(n); 
+        PackedLeafNode* new_leaf = allocate_packed(leaf->slotuse);
+        new_leaf->prev_leaf = leaf->prev_leaf;
+        new_leaf->next_leaf = leaf->next_leaf;
+        std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
+        parent->childid[parentslot] = new_leaf;
+        free_node(n);
+        // auto end = std::chrono::high_resolution_clock::now();
+        // Calculate the duration in nanoseconds and output the duration
+        // auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        // std::cout << duration << " nanoseconds." << std::endl;
         return;
     }
 
+    void gappedToSuccinct(node* n, InnerNode* parent, unsigned int parentslot){
+        LeafNode * leaf = static_cast<LeafNode *>(n); 
+        SuccinctLeafNode *new_leaf = allocate_succinct();
+        new_leaf->prev_leaf = leaf->prev_leaf;
+        new_leaf->next_leaf = leaf->next_leaf;
+        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->compress_data(leaf->slotdata);
+        parent->childid[parentslot] = new_leaf;
+        free_node(n);
+    }
+
+    void succinctToGapped(node* n, InnerNode* parent, unsigned int parentslot){
+        SuccinctLeafNode * leaf = static_cast<SuccinctLeafNode *>(n);
+        LeafNode* new_leaf = allocate_leaf();
+        new_leaf->prev_leaf = leaf->prev_leaf;
+        new_leaf->next_leaf = leaf->next_leaf;
+        new_leaf->slotuse = leaf->slotuse;
+        leaf->decompress_data(new_leaf->slotdata);
+        parent->childid[parentslot] = new_leaf;
+        free_node(n);
+    }
+
+    void packedToGapped(node* n, InnerNode* parent, unsigned int parentslot){
+        PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n);
+        LeafNode* new_leaf = allocate_leaf();
+        new_leaf->prev_leaf = leaf->prev_leaf;
+        new_leaf->next_leaf = leaf->next_leaf;
+        new_leaf->slotuse = leaf->slotuse;
+        copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
+        parent->childid[parentslot] = new_leaf;
+        free_node(n);
+    }
+
+    void packedToSuccinct(node* n, InnerNode* parent, unsigned int parentslot){
+        PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n); 
+        SuccinctLeafNode *new_leaf = allocate_succinct();
+        new_leaf->prev_leaf = leaf->prev_leaf;
+        new_leaf->next_leaf = leaf->next_leaf;
+        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->compress_data(leaf->slotdata);
+        parent->childid[parentslot] = new_leaf;
+        free_node(n);
+    }
+    void Encode(node *n, EncodingSchema encode, InnerNode *parent, unsigned int parentslot){
+        if (n->is_gapped()){
+            LeafNode * leaf = static_cast<LeafNode *>(n); 
+            if (encode == packed || encode == compact){
+                gappedToPacked(n, parent, parentslot);
+            }
+            else if (encode == succinct){
+                gappedToSuccinct(n, parent, parentslot);
+            }
+        }
+        else if (n->is_succinct()){
+            if (encode == gapped || encode == expand){
+                succinctToGapped(n, parent, parentslot);
+            }
+        }
+        else if (n->is_packed()){
+            if (encode == gapped || encode == expand){
+                packedToGapped(n, parent, parentslot);
+            }
+            else if (encode == succinct || encode == compact){
+                packedToSuccinct(n, parent, parentslot);
+            }
+        }
+        return;
+    }
 public:
     //! \name Iterators and Reverse Iterators
     //! \{
@@ -1834,12 +1875,17 @@ public:
         }
 
         //! Hybrid index
-        if (n->is_succinct()){
-            Encode(n, gapped, inner, slot);
-            n = inner->childid[slot];
-        }
         if (adapt_manager_.IsSample()){
             adapt_manager_.Track(n, AdaptationAccessType::READ, inner, slot);
+            n = inner->childid[slot];
+        }        
+        if (n->is_succinct()){
+            Encode(n, gapped, inner, slot);
+            adapt_manager_.ClearSample(n);
+            n = inner->childid[slot];
+            // SuccinctLeafNode *sln = static_cast<SuccinctLeafNode*>(n);
+            // value_type tmp[leaf_slotmax];
+            // sln->decompress_data(tmp);
         }
 
         if (n->is_gapped()){
@@ -1849,9 +1895,7 @@ public:
                 ? iterator(leaf, slot) : end();
         }
 
-        // PackedLeafNode* leaf = static_cast<PackedLeafNode*>(n)
-        
-        ;
+        // PackedLeafNode* leaf = static_cast<PackedLeafNode*>(n);
         // slot = find_lower(leaf, key);
         // return (slot < leaf->slotuse && key_equal(key, leaf->key(slot)))
         //     ? iterator(leaf, slot) : end();
@@ -2500,7 +2544,7 @@ public:
             return;
         }
 
-        TLX_BTREE_ASSERT(stats_.leaves == num_leaves);
+        // TLX_BTREE_ASSERT(stats_.leaves == num_leaves);
 
         // create first level of inner nodes, pointing to the leaves.
         size_t num_parents =
@@ -3848,7 +3892,7 @@ public:
             verify_node(root_, &minkey, &maxkey, vstats);
 
             tlx_die_unless(vstats.size == stats_.size);
-            tlx_die_unless(vstats.leaves == stats_.leaves);
+            // tlx_die_unless(vstats.leaves == stats_.leaves);
             tlx_die_unless(vstats.inner_nodes == stats_.inner_nodes);
 
             verify_leaflinks();

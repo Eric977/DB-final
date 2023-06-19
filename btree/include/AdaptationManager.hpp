@@ -6,12 +6,17 @@
 #include <bitset>
 #include <queue>
 #include <vector>
+#include <chrono>
 #include "btree_hybrid.hpp"
 
-#define SAMPLESIZE 100
+#define SAMPLESIZE 500
 
-#define SKIPLENGTH 5
-#define K 2
+
+
+#define SKIPLENGTH 10
+#define K 50
+
+
 
 
 using namespace std;
@@ -65,6 +70,11 @@ public:
             cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
         }
     }
+
+    void ClearSample(const Identifier &id){
+        samples_.erase(id);
+    }
+    
 
 private:
     void Classify(); 
@@ -146,25 +156,23 @@ void AdaptationManager<Index, Identifier, Context>::Track(const Identifier &id, 
     if (sample_size >= global_sample_size_) {
         sample_size = 0;
         Classify();
+        sample.first.last_classifications = true;
         Adapt();
     }
 }
 
 template <class Index, typename Identifier, typename Context>
 void AdaptationManager<Index, Identifier, Context>::Adapt() {
-    int cnt = 0;
     for (auto &sample : samples_){
         // Cold Node
         if (!sample.second.first.last_classifications){
-            // cout << sample.second.first.reads << " " << sample.second.first.writes << "\n";
-            cnt ++;
-            index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
+            index_->Encode(sample.first, Index::EncodingSchema::succinct, sample.second.second.first, sample.second.second.second);
         }
-        // else{
-        //     index_->Encode(sample.first, Index::EncodingSchema::gapped, sample.second.second.first, sample.second.second.second);
-        // }
+        else{
+            index_->Encode(sample.first, Index::EncodingSchema::expand, sample.second.second.first, sample.second.second.second);
+        }
     }
-    // cout << "hot ratio " << (double)cnt / samples_.size() << "\n";
+
     samples_.clear();
 
     return;
