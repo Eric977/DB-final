@@ -11,10 +11,9 @@
 
 #define SAMPLESIZE 500
 
-
-
 #define SKIPLENGTH 10
-#define K 50
+#define K 200
+#define HotRatio 0.3
 
 
 
@@ -100,7 +99,8 @@ void AdaptationManager<Index, Identifier, Context>::Classify() {
         return a.second.reads + a.second.writes > b.second.reads + b.second.writes;
     };
 
-    size_t k = K; // Set the value for k
+    // size_t k = K; // Set the value for k
+    size_t k = samples_.size() * HotRatio;
     priority_queue<pair<Identifier, AccessStats>, vector<pair<Identifier, AccessStats>>, decltype(comp)> pq(comp);
 
     for (auto &sample : samples_) {
@@ -166,7 +166,7 @@ void AdaptationManager<Index, Identifier, Context>::Adapt() {
     for (auto &sample : samples_){
         // Cold Node
         if (!sample.second.first.last_classifications){
-            index_->Encode(sample.first, Index::EncodingSchema::succinct, sample.second.second.first, sample.second.second.second);
+            index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
         }
         else{
             index_->Encode(sample.first, Index::EncodingSchema::expand, sample.second.second.first, sample.second.second.second);

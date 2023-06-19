@@ -324,6 +324,11 @@ public:
     const tree_stats& get_stats() const {
         return tree_.get_stats();
     }
+    
+    //! Print Some information
+    void get_size(){
+        return tree_.get_size();
+    }
 
     //! \}
 

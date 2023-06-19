@@ -7,36 +7,144 @@
 #include <vector>
 #include <thread>
 #include <fstream>
+#include <unistd.h>
+#include <sys/sysctl.h>
+#include <sys/resource.h>
+#include <mach/mach.h>
+
+
 
 #include "../include/btree_map.hpp"
 
+
 using namespace std;
 
+
+typedef tlx::btree_map<string, string, less<string> > btree_type;
 void loadKVpair(string file, vector<string>& keys, vector<string>& values){
     std::ifstream inputFile(file);  
+    set<string> mp;
+    if (!inputFile) {
+        std::cerr << "Failed to open file." << std::endl;
+        return;
+    }
+    string line;
+    while (getline(inputFile, line)){
+        istringstream iss(line);
+        string key, value;
+        iss >> key >> value;
+        keys.push_back(key);
+        values.push_back(value);
+        mp.insert(key);
+    }
+    inputFile.close();
 }
 
+void loadAndInsertKVpair(string file, btree_type* bt){
+    std::ifstream inputFile(file); 
+    if (!inputFile) {
+        std::cerr << "Failed to open file." << std::endl;
+        return;
+    }
+    string line;
+    while (getline(inputFile, line)){
+        istringstream iss(line);
+        string key, value;
+        iss >> key >> value;
+        // keys.push_back(key);
+        // values.push_back(value);
+        bt->insert2(key, value);
+    }
+
+}
+
+void ReadKey(string file, btree_type* bt){
+    std::ifstream inputFile(file); 
+    if (!inputFile) {
+        std::cerr << "Failed to open file." << std::endl;
+        return;
+    }
+    string line;
+    int i = 0;
+    while (getline(inputFile, line)){
+        istringstream iss(line);
+        string key, value;
+        iss >> key >> value;
+        auto k = bt->find(key);
+
+        if (k->first != key || k->second != value){
+            cout << "key not match\n";
+            cout << k->first << " " << key << "\n";
+        }
+
+        // cout << k->first << " " << k->second << "\n";
+        // bt->erase_one(key);
+    }
+}
+
+uint64_t mem_snapshot(){
+    task_t task = mach_task_self();
+    struct task_basic_info taskInfo;
+    mach_msg_type_number_t infoCount = TASK_BASIC_INFO_COUNT;
+    kern_return_t result;
+    result = task_info(task, TASK_BASIC_INFO, (task_info_t)&taskInfo, &infoCount);
+    return taskInfo.resident_size;
+}
+
+void print_stats(btree_type* bt){
+    // bt->get_size();
+    cout << "size = " << bt->get_stats().size << std::endl;
+    cout << "gapped = " << bt->get_stats().leaves << std::endl;
+    // cout << "packed = " << bt->get_stats().packeds << std::endl;
+    // cout << "succinct = " << bt->get_stats().succincts << std::endl;
+    // cout << "leaves = " << bt->get_stats().packeds + bt->get_stats().leaves + bt->get_stats().succincts << std::endl;
+
+    return;
+}
+
+int main(int argc, char** argv){
 
 
-int main(){
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
+    std::this_thread::sleep_for(std::chrono::seconds(2));
     // Load key value
     vector<string> keys, values;
-    loadKVpair("../workloads/sample_big", keys, values);
     // Testing B tree
-    typedef tlx::btree_map<string, string, less<string> > btree_type;
     btree_type *bt = new btree_type();
-    for (int i = 0; i < keys.size(); i ++){
-        bt->insert2(keys[i], values[i]);
-    }
-    bt->erase_one(keys[0]);
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-    cout << "size = " << bt->get_stats().size << std::endl;
-    // cout << "leaves = " << bt->get_stats().leaves << std::endl;
-    // cout << "inner_nodes = " << bt->get_stats().inner_nodes << std::endl;
-    // cout << "avgfill = " << bt->get_stats().avgfill_leaves() << std::endl;
-    // cout << "mem = " << (256 * bt->get_stats().nodes()) << std::endl;
+    loadAndInsertKVpair(argv[1], bt);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    uint64_t first, migrate, last;
+
+    first = mem_snapshot();
+    // cout << "start migrate\n";
+
+    cout << "Start Read Workload\n";
+    auto start = std::chrono::high_resolution_clock::now();
+    ReadKey(argv[1], bt);
+    auto end = std::chrono::high_resolution_clock::now();
+    // Calculate the duration in nanoseconds and output the duration
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "Read complete in " << duration << " milliseconds." << std::endl;
+
+    print_stats(bt);
+    // cout << "Read key again\n";
+
+
+    // print_stats();
+
+    // bt->clear();
+    // btree_type *bt2 = new btree_type();
+    // cout << "Construct another tree\n";
+    // loadAndInsertKVpair(argv[1], bt2);
+    // ReadKey(argv[1], bt2);
+
+
+
+    // bt->clear();
+    cout << "Memory Usage: " << first << "\n";
+    // cout << "Saving: " << (double)(first * 2 - last) /  (first) << "\n";
+    ;
+    
 
     return 0;
 }
