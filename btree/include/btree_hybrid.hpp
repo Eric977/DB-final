@@ -304,6 +304,8 @@ private:
     struct BaseLeafNode : public node{
         typedef typename std::allocator_traits<Allocator>::template rebind_alloc<BaseLeafNode> alloc_type;
         value_type* slotdata;
+        BaseLeafNode* prev_leaf;
+        BaseLeafNode* next_leaf;
 
         void initialize() {
             node::initialize(0);
@@ -331,21 +333,43 @@ private:
             return (node::slotuse < leaf_slotmin);
         }
 
+        void replace(BaseLeafNode* l){
+            prev_leaf = l->prev_leaf;
+            next_leaf = l->next_leaf;
+            if (next_leaf)
+                next_leaf->prev_leaf = this;
+            if (prev_leaf)
+                prev_leaf->next_leaf = this;
+            node::slotuse = l->slotuse;
+        }
+
         //! Set the (key,data) pair in slot. Overloaded function used by
         //! bulk_load().
         void set_slot(unsigned short slot, const value_type& value) {
             TLX_BTREE_ASSERT(slot < node::slotuse);
             slotdata[slot] = value;
         }
+
+        //! Resize the slotdat array
+        void resize(unsigned int k){
+            if (this->is_gapped()  || k > leaf_slotmax)
+                return;
+            value_type* new_slotdata = new value_type[k];
+            std::copy(BaseLeafNode::slotdata, BaseLeafNode::slotdata + node::slotuse, new_slotdata);
+            delete []BaseLeafNode::slotdata;
+            BaseLeafNode::slotdata = new_slotdata;
+        }
+
     };
 
+    //! Hybrid Index: gapped leaf node
     //! Extended structure of a leaf node in memory. Contains pairs of keys and
     //! data items. Key and data slots are kept together in value_type.
     struct LeafNode : public BaseLeafNode {
         //! Define an related allocator for the LeafNode structs.
         typedef typename std::allocator_traits<Allocator>::template rebind_alloc<LeafNode> alloc_type;
-        LeafNode* prev_leaf;
-        LeafNode* next_leaf;
+        // LeafNode* prev_leaf;
+        // LeafNode* next_leaf;
 
         //! Array of (key, data) pairs
         value_type gappedslotdata[leaf_slotmax]; // NOLINT
@@ -363,8 +387,8 @@ private:
     struct PackedLeafNode : public BaseLeafNode {
         //! Define an related allocator for the LeafNode structs.
         typedef typename std::allocator_traits<Allocator>::template rebind_alloc<PackedLeafNode> alloc_type;
-        LeafNode* prev_leaf;
-        LeafNode* next_leaf;
+        // LeafNode* prev_leaf;
+        // LeafNode* next_leaf;
 
         //! Array of (key, data) pairs
         // value_type* slotdata;
@@ -375,14 +399,14 @@ private:
             node::slotuse = size;
         }    
         //! extend k slot in the packed array
-        void resize(unsigned int k){
-            if (node::slotuse + k > leaf_slotmax)
-                return;
-            value_type* new_slotdata = new value_type[node::slotuse+k];
-            std::copy(BaseLeafNode::slotdata, BaseLeafNode::slotdata + node::slotuse, new_slotdata);
-            delete []BaseLeafNode::slotdata;
-            BaseLeafNode::slotdata = new_slotdata;
-        }
+        // void resize(unsigned int k){
+        //     if (node::slotuse + k > leaf_slotmax)
+        //         return;
+        //     value_type* new_slotdata = new value_type[node::slotuse+k];
+        //     std::copy(BaseLeafNode::slotdata, BaseLeafNode::slotdata + node::slotuse, new_slotdata);
+        //     delete []BaseLeafNode::slotdata;
+        //     BaseLeafNode::slotdata = new_slotdata;
+        // }
 
         //! shrink k slot in the packed array
         void shrink(unsigned int k){
@@ -396,15 +420,10 @@ private:
     };
 
     //! Hybrid Index: succinct leaf node
-    struct SuccinctLeafNode : public node {
+    struct SuccinctLeafNode : public BaseLeafNode {
         //! Define an related allocator for the LeafNode structs.
         typedef typename std::allocator_traits<Allocator>::template rebind_alloc<SuccinctLeafNode> alloc_type;
 
-        //! Double linked list pointers to traverse the leaves
-        LeafNode* prev_leaf;
-
-        //! Double linked list pointers to traverse the leaves
-        LeafNode* next_leaf;
 
         //! Compressed data
         vector<char> slotdata;
@@ -413,28 +432,8 @@ private:
         int src_size;
         //! Set variables to initial values
         void initialize() {
-            node::initialize(0);
-            prev_leaf = next_leaf = nullptr;
-        }
-
-        //! Return key in slot s.
-        const key_type& key(size_t s) const {
-            return key_of_value::get(slotdata[s]);
-        }
-
-        //! True if the node's slots are full.
-        bool is_full() const {
-            return (node::slotuse == leaf_slotmax);
-        }
-
-        //! True if few used entries, less than half full.
-        bool is_few() const {
-            return (node::slotuse <= leaf_slotmin);
-        }
-
-        //! True if node has too few entries.
-        bool is_underflow() const {
-            return (node::slotuse < leaf_slotmin);
+            BaseLeafNode::initialize();
+            src_size = 0;
         }
 
         //! Set the (key,data) pair in slot. Overloaded function used by
@@ -474,6 +473,10 @@ public:
     typedef typename AdaptationManagerType::AccessType AdaptationAccessType;
     // AdaptationManager<BTree<Key, Value, KeyOfValue, Compare, Traits, Duplicates, Allocator>, node *, node *> adapt_manager_;
     AdaptationManagerType adapt_manager_;
+
+    void setMode(int mode){
+        adapt_manager_.setMode(mode);
+    }
 private:
     size_t GetUseMemory();
     // Encoding EvaluateHeuristic(const AccessStats &);
@@ -481,13 +484,9 @@ private:
     void gappedToPacked(node* n, InnerNode* parent, unsigned int parentslot){
         // auto start = std::chrono::high_resolution_clock::now();
         LeafNode * leaf = static_cast<LeafNode *>(n); 
-        // leaf->resize(leaf->slotuse);
-        // leaf->isPacked = true;
         PackedLeafNode* new_leaf = allocate_packed(leaf->slotuse);
-        // new_leaf->copy(leaf);
-        new_leaf->prev_leaf = leaf->prev_leaf;
-        new_leaf->next_leaf = leaf->next_leaf;
-        std::copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
+        new_leaf->replace(leaf);
+        copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
         parent->childid[parentslot] = new_leaf;
         free_node(n);
         // auto end = std::chrono::high_resolution_clock::now();
@@ -500,9 +499,7 @@ private:
     void gappedToSuccinct(node* n, InnerNode* parent, unsigned int parentslot){
         LeafNode * leaf = static_cast<LeafNode *>(n); 
         SuccinctLeafNode *new_leaf = allocate_succinct();
-        new_leaf->prev_leaf = leaf->prev_leaf;
-        new_leaf->next_leaf = leaf->next_leaf;
-        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->replace(leaf);
         new_leaf->compress_data(leaf->slotdata);
         parent->childid[parentslot] = new_leaf;
         free_node(n);
@@ -511,9 +508,7 @@ private:
     void succinctToGapped(node* n, InnerNode* parent, unsigned int parentslot){
         SuccinctLeafNode * leaf = static_cast<SuccinctLeafNode *>(n);
         LeafNode* new_leaf = allocate_leaf();
-        new_leaf->prev_leaf = leaf->prev_leaf;
-        new_leaf->next_leaf = leaf->next_leaf;
-        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->replace(leaf);
         leaf->decompress_data(new_leaf->slotdata);
         parent->childid[parentslot] = new_leaf;
         free_node(n);
@@ -522,9 +517,7 @@ private:
     void packedToGapped(node* n, InnerNode* parent, unsigned int parentslot){
         PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n);
         LeafNode* new_leaf = allocate_leaf();
-        new_leaf->prev_leaf = leaf->prev_leaf;
-        new_leaf->next_leaf = leaf->next_leaf;
-        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->replace(leaf);
         copy(leaf->slotdata, leaf->slotdata + leaf->slotuse, new_leaf->slotdata);
         parent->childid[parentslot] = new_leaf;
         free_node(n);
@@ -533,9 +526,7 @@ private:
     void packedToSuccinct(node* n, InnerNode* parent, unsigned int parentslot){
         PackedLeafNode *leaf = static_cast<PackedLeafNode *>(n); 
         SuccinctLeafNode *new_leaf = allocate_succinct();
-        new_leaf->prev_leaf = leaf->prev_leaf;
-        new_leaf->next_leaf = leaf->next_leaf;
-        new_leaf->slotuse = leaf->slotuse;
+        new_leaf->replace(leaf);
         new_leaf->compress_data(leaf->slotdata);
         parent->childid[parentslot] = new_leaf;
         free_node(n);
@@ -1870,10 +1861,6 @@ public:
             Encode(n, gapped, inner, slot);
             adapt_manager_.ClearSample(n);
             n = inner->childid[slot];
-            // SuccinctLeafNode *sln = static_cast<SuccinctLeafNode*>(n);
-            // value_type tmp[leaf_slotmax];
-            // sln->decompress_data(tmp);
-
         }
 
         if (n->is_gapped()){
@@ -2361,8 +2348,7 @@ private:
         }
         else // n->is_leafnode() == true
         {
-            LeafNode* leaf = static_cast<LeafNode*>(n);
-
+            BaseLeafNode* leaf = static_cast<BaseLeafNode*>(n);
             unsigned short slot = find_lower(leaf, key);
 
             if (!allow_duplicates &&
@@ -2378,13 +2364,13 @@ private:
                 if (slot >= leaf->slotuse)
                 {
                     slot -= leaf->slotuse;
-                    leaf = static_cast<LeafNode*>(*splitnode);
+                    leaf = static_cast<BaseLeafNode*>(*splitnode);
                 }
             }
 
             // move items and put data item into correct data slot
             TLX_BTREE_ASSERT(slot >= 0 && slot <= leaf->slotuse);
-
+            leaf->resize(leaf->slotuse + 1);
             std::copy_backward(
                 leaf->slotdata + slot, leaf->slotdata + leaf->slotuse,
                 leaf->slotdata + leaf->slotuse + 1);
@@ -2405,7 +2391,7 @@ private:
 
     //! Split up a leaf node into two equally-filled sibling leaves. Returns the
     //! new nodes and it's insertion key in the two parameters.
-    void split_leaf_node(LeafNode* leaf,
+    void split_leaf_node(BaseLeafNode* leaf,
                          key_type* out_newkey, node** out_newleaf) {
         TLX_BTREE_ASSERT(leaf->is_full());
 
@@ -2425,7 +2411,6 @@ private:
         else {
             newleaf->next_leaf->prev_leaf = newleaf;
         }
-
         std::copy(leaf->slotdata + mid, leaf->slotdata + leaf->slotuse,
                   newleaf->slotdata);
 
@@ -3985,7 +3970,7 @@ private:
 
     //! Verify the double linked list of leaves.
     void verify_leaflinks() const {
-        const LeafNode* n = head_leaf_;
+        const BaseLeafNode* n = head_leaf_;
 
         tlx_die_unless(n->level == 0);
         tlx_die_unless(!n || n->prev_leaf == nullptr);

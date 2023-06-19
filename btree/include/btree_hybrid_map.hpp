@@ -330,6 +330,10 @@ public:
         return tree_.get_size();
     }
 
+    void setMode(int mode){
+        return tree_.setMode(mode);
+    }
+
     //! \}
 
 public:

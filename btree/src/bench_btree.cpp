@@ -23,7 +23,6 @@ using namespace std;
 typedef tlx::btree_map<string, string, less<string> > btree_type;
 void loadKVpair(string file, vector<string>& keys, vector<string>& values){
     std::ifstream inputFile(file);  
-    set<string> mp;
     if (!inputFile) {
         std::cerr << "Failed to open file." << std::endl;
         return;
@@ -35,7 +34,6 @@ void loadKVpair(string file, vector<string>& keys, vector<string>& values){
         iss >> key >> value;
         keys.push_back(key);
         values.push_back(value);
-        mp.insert(key);
     }
     inputFile.close();
 }
@@ -110,6 +108,10 @@ int main(int argc, char** argv){
     vector<string> keys, values;
     // Testing B tree
     btree_type *bt = new btree_type();
+
+    cout << "Load key value pair\n";
+    int mode = stoi(argv[2]);
+    bt->setMode(mode);
     loadAndInsertKVpair(argv[1], bt);
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -128,8 +130,6 @@ int main(int argc, char** argv){
     // cout << "Read key again\n";
 
     migrate = mem_snapshot();
-
-    // print_stats();
 
     // bt->clear();
     btree_type *bt2 = new btree_type();

@@ -73,9 +73,14 @@ public:
     void ClearSample(const Identifier &id){
         samples_.erase(id);
     }
+
+    void setMode(int mode){
+        mode_ = mode;
+    }
     
 
 private:
+    int mode_;
     void Classify(); 
     void Adapt();    
     atomic<size_t> global_skip_length_; // Adaptive parameter
@@ -166,9 +171,22 @@ void AdaptationManager<Index, Identifier, Context>::Adapt() {
     for (auto &sample : samples_){
         // Cold Node
         if (!sample.second.first.last_classifications){
-            index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
+            switch(mode_){
+            case 0:
+                index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
+                break;
+            case 1:
+                index_->Encode(sample.first, Index::EncodingSchema::succinct, sample.second.second.first, sample.second.second.second);
+                break;
+            case 2:
+                index_->Encode(sample.first, Index::EncodingSchema::packed, sample.second.second.first, sample.second.second.second);
+                break;
+            case 3:
+                index_->Encode(sample.first, Index::EncodingSchema::compact, sample.second.second.first, sample.second.second.second);
+                break;
+            }
         }
-        else{
+        else if (mode_ != 2){
             index_->Encode(sample.first, Index::EncodingSchema::expand, sample.second.second.first, sample.second.second.second);
         }
     }

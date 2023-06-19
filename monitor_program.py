@@ -5,12 +5,12 @@ import subprocess
 import matplotlib.pyplot as plt
 
 
-def log_memory_usage(program, duration, logfile, pltfile):
+def log_memory_usage(program, duration, logfile, pltfile, workloadfile):
     timestamps = []
     mem_usages = []
     with open(logfile, 'w+') as f:
         # Start the program as a child process
-        process = subprocess.Popen(program)
+        process = subprocess.Popen([program, workloadfile])
         pid = process.pid
 
         # Monitor the child process
@@ -59,12 +59,13 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--program', type=str, required=True, help='Path to the executable to run and monitor')
-    parser.add_argument('-d', '--duration', type=int, default=15, help='Duration to monitor for (in seconds)')
+    parser.add_argument('-d', '--duration', type=int, default=50, help='Duration to monitor for (in seconds)')
+    parser.add_argument('-f', '--file', type=str, default='workloads/sample', help='workload filename')
     # parser.add_argument('-f', '--logfile', type=str, default='../log/memory_log.txt', help='Log file to write memory usage to')
     args = parser.parse_args()
 
     logfile = dir_path + args.program + '_log.txt'
     imgfile = dir_path + args.program + '_plot.png'
 
-    log_memory_usage(args.program, args.duration, logfile, imgfile)
+    log_memory_usage(args.program, args.duration, logfile, imgfile, args.file)
 

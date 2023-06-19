@@ -109,6 +109,8 @@ int main(int argc, char** argv){
     // Load key value
     vector<string> keys, values;
     // Testing B tree
+
+    cout << "Load key value pair\n";
     btree_type *bt = new btree_type();
     loadAndInsertKVpair(argv[1], bt);
     std::this_thread::sleep_for(std::chrono::seconds(2));
