@@ -21,13 +21,3 @@ cd build && cmake ../ && make
 cd ../..
 echo -e "\n----------Finished installing snappy----------\n"
 
-# Install FastPFor
-echo -e "\n----------Installing FastPFor----------\n"
-git clone https://github.com/lemire/FastPFor.git
-cd FastPFor
-mkdir build
-cd build
-cmake ..
-cmake --build .
-cd ../..
-echo -e "\n----------Finished installing FastPFor----------\n"
